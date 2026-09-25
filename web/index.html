@@ -29,6 +29,13 @@
   --r: 7px;
   --fs: 'Archivo', 'Helvetica Neue', Arial, sans-serif;
   --fm: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+     /* Added to the Home Screen the web view runs full-bleed under the Dynamic
+     Island and the home indicator. Held as variables so they can be overridden
+     for testing on a desktop, where env() is always 0. */
+  --sat: env(safe-area-inset-top, 0px);
+  --sab: env(safe-area-inset-bottom, 0px);
+  --sal: env(safe-area-inset-left, 0px);
+  --sar: env(safe-area-inset-right, 0px);
 }
 * { box-sizing: border-box; }
 /* Must outrank the display values set on .empty, canvases and .cap below,
