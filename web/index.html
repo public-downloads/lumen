@@ -59,7 +59,8 @@ button { cursor: pointer; }
 /* ---------- top bar ---------- */
 .bar {
   display: flex; align-items: center; gap: 12px;
-  padding: 32px 16px 10px 16px; border-bottom: 1px solid var(--line);
+  padding: calc(10px + var(--sat)) calc(16px + var(--sar)) 10px calc(16px + var(--sal));
+  border-bottom: 1px solid var(--line);
   background: var(--ink);
 }
 .brand {
@@ -113,8 +114,10 @@ button { cursor: pointer; }
   border-top: 1px solid var(--line); background: var(--ink);
   max-height: 47vh; overflow-y: auto; -webkit-overflow-scrolling: touch;
 }
-.deckpad { padding: 12px 16px 18px; display: grid; gap: 12px; }
-/* Grid children default to min-width:auto and refuse to shrink below their
+.deckpad {
+  display: grid; gap: 12px;
+  padding: 12px calc(16px + var(--sar)) calc(18px + var(--sab)) calc(16px + var(--sal));
+}/* Grid children default to min-width:auto and refuse to shrink below their
    content, which pushes a horizontal scrollbar onto the whole page. */
 .deckpad > *, .sect > *, #deckCam > *, #deckEdit > * { min-width: 0; }
 
