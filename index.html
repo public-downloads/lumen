@@ -1,0 +1,1687 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Lumen">
+<meta name="theme-color" content="#121110">
+<title>Lumen Darkroom</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* A photo tool's interface should stay close to neutral: surrounding colour
+   shifts how you judge the image. The only saturated pixels here are the
+   amber active state and the red mask wash. */
+:root {
+  color-scheme: dark;
+  --ink:    #121110;
+  --stage:  #000000;
+  --panel:  #1b1a18;
+  --raised: #242220;
+  --line:   #322f2c;
+  --text:   #ece9e4;
+  --dim:    #8e8983;
+  --faint:  #5d5852;
+  --amber:  #ffa031;
+  --mask:   #ff3b52;
+  --good:   #7fd1a6;
+  --r: 7px;
+  --fs: 'Archivo', 'Helvetica Neue', Arial, sans-serif;
+  --fm: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+
+  /* Added to the Home Screen the web view runs full-bleed under the Dynamic
+     Island and the home indicator. Held as variables so they can be overridden
+     for testing on a desktop, where env() is always 0. */
+  --sat: env(safe-area-inset-top, 0px);
+  --sab: env(safe-area-inset-bottom, 0px);
+  --sal: env(safe-area-inset-left, 0px);
+  --sar: env(safe-area-inset-right, 0px);
+}
+* { box-sizing: border-box; }
+/* Must outrank the display values set on .empty, canvases and .cap below,
+   otherwise el.hidden does nothing. */
+[hidden] { display: none !important; }
+html, body { height: 100%; margin: 0; }
+body {
+  background: var(--ink);
+  color: var(--text);
+  font-family: var(--fs);
+  font-size: 14px;
+  -webkit-text-size-adjust: 100%;
+  overscroll-behavior: none;
+}
+button, input, select { font-family: inherit; color: inherit; }
+button { cursor: pointer; }
+
+#app {
+  display: grid;
+  grid-template-rows: auto minmax(0,1fr) auto;
+  grid-template-columns: minmax(0, 1fr);
+  height: 100%;
+}
+/* Without this the nowrap readout in the bar widens the whole grid track and
+   every row with it, and the page scrolls sideways. */
+#app > * { min-width: 0; }
+
+/* ---------- top bar ---------- */
+.bar {
+  display: flex; align-items: center; gap: 12px;
+  padding: calc(10px + var(--sat)) calc(16px + var(--sar)) 10px calc(16px + var(--sal));
+  border-bottom: 1px solid var(--line);
+  background: var(--ink);
+}
+.brand {
+  font-weight: 700; letter-spacing: .14em; text-transform: uppercase;
+  font-size: 11px; color: var(--dim); white-space: nowrap;
+}
+.modes { display: flex; gap: 2px; background: var(--panel); border-radius: var(--r); padding: 2px; }
+.modes button {
+  border: 0; background: transparent; color: var(--dim);
+  font-size: 11px; font-weight: 600; letter-spacing: .07em; text-transform: uppercase;
+  padding: 6px 12px; border-radius: 5px;
+}
+.modes button[aria-selected="true"] { background: var(--raised); color: var(--text); }
+.readout {
+  margin-left: auto; min-width: 0; font-family: var(--fm); font-size: 11px; color: var(--faint);
+  text-align: right; line-height: 1.35; font-variant-numeric: tabular-nums;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* ---------- stage ---------- */
+.stage {
+  position: relative; background: var(--stage);
+  display: grid; grid-template: 1fr / 1fr; place-items: center;
+  overflow: hidden; min-height: 0;
+}
+/* Every child shares one cell and overlays, rather than each claiming a row. */
+.stage > * { grid-area: 1 / 1; }
+.stage canvas, .stage video {
+  max-width: 100%; max-height: 100%; display: block; touch-action: none;
+}
+.stage video { object-fit: contain; }
+.empty {
+  padding: 32px 24px; text-align: center; color: var(--dim); max-width: 34ch;
+  display: grid; gap: 12px; justify-items: center;
+}
+.empty h2 { font-size: 15px; font-weight: 600; color: var(--text); margin: 0; }
+.empty p { margin: 0; font-size: 12.5px; line-height: 1.55; }
+.hist {
+  position: absolute; top: 10px; right: 10px; width: 168px; height: 44px;
+  background: rgba(0,0,0,.58); border: 1px solid var(--line); border-radius: 5px;
+  backdrop-filter: blur(6px);
+}
+.stagebadge {
+  position: absolute; left: 10px; top: 10px; font-family: var(--fm); font-size: 10px;
+  letter-spacing: .05em; color: var(--amber); background: rgba(0,0,0,.6);
+  border: 1px solid var(--line); border-radius: 4px; padding: 3px 7px;
+}
+
+/* ---------- deck ---------- */
+.deck {
+  border-top: 1px solid var(--line); background: var(--ink);
+  max-height: 47vh; overflow-y: auto; -webkit-overflow-scrolling: touch;
+}
+.deckpad {
+  display: grid; gap: 12px;
+  padding: 12px calc(16px + var(--sar)) calc(18px + var(--sab)) calc(16px + var(--sal));
+}
+/* Grid children default to min-width:auto and refuse to shrink below their
+   content, which pushes a horizontal scrollbar onto the whole page. */
+.deckpad > *, .sect > *, #deckCam > *, #deckEdit > * { min-width: 0; }
+
+.rail { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 2px; }
+.rail::-webkit-scrollbar { height: 0; }
+.chip {
+  border: 1px solid var(--line); background: var(--panel); color: var(--dim);
+  border-radius: var(--r); padding: 7px 11px; font-size: 11px; font-weight: 600;
+  letter-spacing: .04em; white-space: nowrap; display: flex; align-items: center; gap: 6px;
+}
+.chip[aria-selected="true"] { background: var(--amber); border-color: var(--amber); color: #1a1408; }
+.chip.off { opacity: .45; }
+.chip .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; opacity: .6; }
+
+.tabs { display: flex; gap: 2px; background: var(--panel); border-radius: var(--r); padding: 2px; }
+.tabs button {
+  flex: 1; border: 0; background: transparent; color: var(--dim); border-radius: 5px;
+  font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; padding: 7px 4px;
+}
+.tabs button[aria-selected="true"] { background: var(--raised); color: var(--text); }
+
+.field { display: grid; gap: 3px; }
+.field .top { display: flex; align-items: baseline; gap: 8px; }
+.field label { font-size: 11.5px; color: var(--dim); font-weight: 500; }
+.field .val {
+  margin-left: auto; font-family: var(--fm); font-size: 11px; color: var(--faint);
+  font-variant-numeric: tabular-nums;
+}
+.field.live .val { color: var(--amber); }
+
+input[type=range] {
+  -webkit-appearance: none; appearance: none; width: 100%; height: 22px;
+  background: transparent; margin: 0;
+}
+input[type=range]::-webkit-slider-runnable-track {
+  height: 2px; background: var(--line); border-radius: 2px;
+}
+input[type=range]::-webkit-slider-thumb {
+  -webkit-appearance: none; width: 16px; height: 16px; border-radius: 50%;
+  background: var(--text); border: 0; margin-top: -7px;
+  box-shadow: 0 0 0 1px rgba(0,0,0,.6);
+}
+input[type=range]:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 2px var(--amber); }
+input[type=range]::-moz-range-track { height: 2px; background: var(--line); border-radius: 2px; }
+input[type=range]::-moz-range-thumb { width: 16px; height: 16px; border: 0; border-radius: 50%; background: var(--text); }
+input[type=range].hot::-webkit-slider-thumb { background: var(--amber); }
+input[type=range].hot::-moz-range-thumb { background: var(--amber); }
+
+.sect {
+  border: 1px solid var(--line); border-radius: var(--r); padding: 10px 11px;
+  display: grid; gap: 9px; background: var(--panel);
+}
+.sect > h3 {
+  margin: 0; font-size: 10px; font-weight: 700; letter-spacing: .13em;
+  text-transform: uppercase; color: var(--faint);
+}
+.hint { font-size: 11px; color: var(--faint); line-height: 1.5; margin: 0; }
+.hint b { color: var(--dim); font-weight: 600; }
+
+.btnrow { display: flex; flex-wrap: wrap; gap: 6px; }
+.btn {
+  border: 1px solid var(--line); background: var(--raised); color: var(--text);
+  border-radius: var(--r); padding: 9px 13px; font-size: 12px; font-weight: 600;
+}
+.btn:disabled { opacity: .38; cursor: not-allowed; }
+.btn.on { background: var(--amber); border-color: var(--amber); color: #1a1408; }
+.btn.primary { background: var(--text); border-color: var(--text); color: #14120f; }
+.btn.wide { flex: 1; justify-content: center; }
+.btn.ghost { background: transparent; }
+
+.shutterrow { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
+.shutter {
+  width: 62px; height: 62px; border-radius: 50%; background: var(--text);
+  border: 3px solid var(--ink); box-shadow: 0 0 0 2px var(--text); flex: 0 0 auto;
+}
+.shutter:disabled { opacity: .35; }
+.thumb {
+  width: 44px; height: 44px; border-radius: 6px; border: 1px solid var(--line);
+  background: var(--panel) center/cover no-repeat; flex: 0 0 auto; padding: 0;
+}
+
+.caps { display: grid; gap: 4px; }
+.cap {
+  display: flex; align-items: center; gap: 8px; font-family: var(--fm);
+  font-size: 10.5px; color: var(--faint);
+}
+.cap .k { color: var(--dim); }
+.cap .v { margin-left: auto; }
+.cap.yes .k { color: var(--good); }
+
+.filebtn { position: relative; overflow: hidden; }
+.filebtn input[type=file] {
+  position: absolute; inset: 0; opacity: 0; cursor: pointer; font-size: 100px;
+}
+
+.saveimg {
+  display: grid; gap: 8px; justify-items: center; padding: 10px;
+  border: 1px dashed var(--line); border-radius: var(--r);
+}
+.saveimg img { max-width: 100%; max-height: 190px; border-radius: 4px; }
+
+.toast {
+  position: fixed; left: 50%; transform: translateX(-50%);
+  bottom: calc(18px + env(safe-area-inset-bottom, 0px));
+  background: var(--raised); border: 1px solid var(--line); color: var(--text);
+  border-radius: 20px; padding: 8px 16px; font-size: 12px; z-index: 50;
+  pointer-events: none; opacity: 0; transition: opacity .18s;
+}
+.toast.show { opacity: 1; }
+
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+
+@media (min-width: 900px) {
+  #app { grid-template-rows: auto minmax(0,1fr); grid-template-columns: minmax(0,1fr) 352px; }
+  .bar { grid-column: 1 / -1; }
+  .deck { max-height: none; border-top: 0; border-left: 1px solid var(--line); }
+}
+</style>
+</head>
+<body>
+<div id="app">
+
+  <header class="bar">
+    <span class="brand">Lumen</span>
+    <div class="modes" role="tablist">
+      <button id="tabCam" role="tab" aria-selected="false">Camera</button>
+      <button id="tabEdit" role="tab" aria-selected="true">Darkroom</button>
+    </div>
+    <div class="readout" id="readout">no image</div>
+  </header>
+
+  <main class="stage" id="stage">
+    <video id="video" playsinline autoplay muted hidden></video>
+    <canvas id="stackCanvas" hidden></canvas>
+    <canvas id="gl" hidden></canvas>
+    <canvas class="hist" id="hist" width="336" height="88" hidden></canvas>
+    <div class="stagebadge" id="badge" hidden></div>
+
+    <div class="empty" id="empty">
+      <h2>Open a photo, or shoot one</h2>
+      <p>Import runs through the system camera, so you get the sensor's full
+         resolution — not the cropped video stream the browser exposes.</p>
+      <span class="btn primary filebtn">Open photo
+        <input type="file" id="fileTop" accept="image/*">
+      </span>
+    </div>
+  </main>
+
+  <section class="deck">
+    <div class="deckpad">
+
+      <!-- ============ CAMERA ============ -->
+      <div id="deckCam" hidden>
+        <div class="btnrow">
+          <button class="btn primary wide" id="startCam">Start camera</button>
+          <button class="btn ghost" id="swapCam" disabled>Flip</button>
+        </div>
+
+        <div class="sect">
+          <h3>Manual controls on this device</h3>
+          <div class="caps" id="caps">
+            <div class="cap"><span class="k">not probed yet</span></div>
+          </div>
+          <p class="hint" id="capsNote">Start the camera and Lumen will report which
+             controls your browser actually exposes.</p>
+        </div>
+
+        <div id="camControls"></div>
+
+        <div class="sect">
+          <h3>Long exposure by stacking</h3>
+          <div class="field">
+            <div class="top"><label for="stackSecs">Duration</label>
+              <span class="val" id="stackSecsVal">3.0 s</span></div>
+            <input type="range" id="stackSecs" min="0.5" max="20" step="0.5" value="3">
+          </div>
+          <div class="tabs" role="tablist">
+            <button id="stackAvg" role="tab" aria-selected="true">Average</button>
+            <button id="stackMax" role="tab" aria-selected="false">Lighten</button>
+          </div>
+          <p class="hint" id="stackHint"><b>Average</b> smooths motion and kills noise,
+             like a neutral-density exposure. <b>Lighten</b> keeps the brightest value per
+             pixel — light trails, star trails, fireworks.</p>
+          <button class="btn wide" id="doStack" disabled>Expose</button>
+        </div>
+
+        <div class="shutterrow">
+          <button class="thumb" id="thumb" title="Open last shot in the darkroom"></button>
+          <button class="shutter" id="snap" disabled aria-label="Take photo"></button>
+          <span class="btn ghost filebtn">Import
+            <input type="file" id="fileCam" accept="image/*">
+          </span>
+        </div>
+      </div>
+
+      <!-- ============ EDITOR ============ -->
+      <div id="deckEdit">
+        <div class="rail" id="rail"></div>
+
+        <div id="maskBox" hidden></div>
+
+        <div class="tabs" role="tablist">
+          <button id="gLight" role="tab" aria-selected="true">Light</button>
+          <button id="gColor" role="tab" aria-selected="false">Color</button>
+          <button id="gDetail" role="tab" aria-selected="false">Detail</button>
+        </div>
+
+        <div id="sliders"></div>
+
+        <div class="btnrow">
+          <button class="btn ghost" id="origBtn">Hold for original</button>
+          <button class="btn ghost" id="resetBtn">Reset</button>
+          <span class="btn ghost filebtn">Open
+            <input type="file" id="fileEdit" accept="image/*">
+          </span>
+          <button class="btn primary wide" id="exportBtn" disabled>Export</button>
+        </div>
+
+        <div class="saveimg" id="saveBox" hidden>
+          <img id="saveImg" alt="Finished edit — press and hold to save to your photos">
+          <p class="hint">On iPhone, press and hold the image above and choose
+             <b>Add to Photos</b>. The Export button saves to Files instead.</p>
+        </div>
+      </div>
+
+    </div>
+  </section>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+'use strict';
+
+/* =====================================================================
+   Lumen Darkroom — manual-ish camera + masked photo editor for the web.
+   No build step, no dependencies. Needs to be served over HTTPS or from
+   localhost: getUserMedia is refused on file:// origins.
+   ===================================================================== */
+
+const MAX_LAYERS = 6;
+const PREVIEW_MAX = 2048;
+const BRUSH_MAX = 1024;
+
+const $ = id => document.getElementById(id);
+const clamp = (v, a, b) => Math.min(Math.max(v, a), b);
+
+let toastTimer = null;
+function toast(msg) {
+  const t = $('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove('show'), 2200);
+}
+
+/* ---------------------------------------------------------------------
+   Adjustment schema. One source of truth for defaults, ranges, the order
+   they pack into the shader's vec4s, and how each value reads out.
+   --------------------------------------------------------------------- */
+const fmtEV   = v => (v >= 0 ? '+' : '') + v.toFixed(2) + ' EV';
+const fmtSign = v => (v > 0 ? '+' : '') + v.toFixed(2);
+const fmtPct  = v => Math.round(v * 100) + '%';
+
+const ADJ = [
+  { k: 'exposure',   label: 'Exposure',   group: 'light',  min: -4, max: 4, step: .01, def: 0, fmt: fmtEV },
+  { k: 'contrast',   label: 'Contrast',   group: 'light',  min: -1, max: 1, step: .01, def: 0, fmt: fmtSign },
+  { k: 'highlights', label: 'Highlights', group: 'light',  min: -1, max: 1, step: .01, def: 0, fmt: fmtSign },
+  { k: 'shadows',    label: 'Shadows',    group: 'light',  min: -1, max: 1, step: .01, def: 0, fmt: fmtSign },
+  { k: 'whites',     label: 'Whites',     group: 'light',  min: -1, max: 1, step: .01, def: 0, fmt: fmtSign },
+  { k: 'blacks',     label: 'Blacks',     group: 'light',  min: -1, max: 1, step: .01, def: 0, fmt: fmtSign },
+  { k: 'temp',       label: 'Temperature',group: 'color',  min: -1, max: 1, step: .01, def: 0, fmt: fmtSign },
+  { k: 'tint',       label: 'Tint',       group: 'color',  min: -1, max: 1, step: .01, def: 0, fmt: fmtSign },
+  { k: 'saturation', label: 'Saturation', group: 'color',  min: -1, max: 1, step: .01, def: 0, fmt: fmtSign },
+  { k: 'vibrance',   label: 'Vibrance',   group: 'color',  min: -1, max: 1, step: .01, def: 0, fmt: fmtSign },
+  { k: 'clarity',    label: 'Clarity',    group: 'detail', min: -1, max: 1, step: .01, def: 0, fmt: fmtSign },
+  { k: 'blur',       label: 'Blur',       group: 'detail', min:  0, max: 1, step: .01, def: 0, fmt: fmtPct },
+];
+// Packing order must match the shader's uG / uL vec4 triples exactly.
+const PACK = ['exposure','contrast','highlights','shadows',
+              'whites','blacks','temp','tint',
+              'saturation','vibrance','clarity','blur'];
+
+const newAdj = () => { const a = {}; for (const d of ADJ) a[d.k] = d.def; return a; };
+const isNeutral = a => ADJ.every(d => Math.abs(a[d.k] - d.def) < 1e-6);
+
+const MASK_KINDS = [
+  { id: 0, k: 'whole',     label: 'Whole image' },
+  { id: 1, k: 'radial',    label: 'Radial' },
+  { id: 2, k: 'linear',    label: 'Linear' },
+  { id: 3, k: 'brush',     label: 'Brush' },
+  { id: 4, k: 'luminance', label: 'Luminance' },
+];
+
+function newLayer(kindId) {
+  return {
+    adj: newAdj(),
+    enabled: true,
+    opacity: 1,
+    mask: {
+      kind: kindId, invert: false, feather: .35,
+      cx: .5, cy: .5, radius: .34,
+      angle: 90, position: .5,
+      lumaLo: 0, lumaHi: .5,
+    },
+    brush: { canvas: null, ctx: null, dirty: false, size: .07, softness: .6, erasing: false },
+  };
+}
+
+/* ---------------------------------------------------------------------
+   App state
+   --------------------------------------------------------------------- */
+const S = {
+  mode: 'edit',
+  group: 'light',
+  global: newAdj(),
+  layers: [],
+  sel: -1,            // -1 = global
+  showOriginal: false,
+  showMask: false,
+  image: null,        // { bitmap, w, h }  full resolution source
+  stream: null,
+  track: null,
+  facing: 'environment',
+  stackMode: 'avg',
+  lastShot: null,     // canvas handed over from the camera
+};
+
+/* =====================================================================
+   WebGL renderer
+   ===================================================================== */
+const glc = $('gl');
+const gl = glc.getContext('webgl2', {
+  preserveDrawingBuffer: true, premultipliedAlpha: false, antialias: false, alpha: false,
+});
+
+const VERT = `#version 300 es
+in vec2 aPos;
+out vec2 vUV;
+void main() {
+  // vUV.y runs 0 at the top, matching both the image rows and pointer
+  // coordinates, so masks need no flipping anywhere.
+  vUV = vec2((aPos.x + 1.0) * 0.5, (1.0 - aPos.y) * 0.5);
+  gl_Position = vec4(aPos, 0.0, 1.0);
+}`;
+
+function fragSource() {
+  let layers = '';
+  for (let i = 0; i < MAX_LAYERS; i++) {
+    layers += `
+  if (${i} < uLayerCount) {
+    float m = maskValue(uM[${i * 3}], uM[${i * 3 + 1}], uM[${i * 3 + 2}], uBrush${i});
+    col = mix(col, applyAdj(col, uL[${i * 3}], uL[${i * 3 + 1}], uL[${i * 3 + 2}]), m);
+    if (uMaskPreview == ${i}) wash = m;
+  }`;
+  }
+  let samplers = '';
+  for (let i = 0; i < MAX_LAYERS; i++) samplers += `uniform sampler2D uBrush${i};\n`;
+
+  return `#version 300 es
+precision highp float;
+in vec2 vUV;
+out vec4 fragColor;
+
+uniform sampler2D uImage;
+uniform sampler2D uBlur;
+${samplers}
+uniform vec4  uG[3];
+uniform vec4  uL[${MAX_LAYERS * 3}];
+uniform vec4  uM[${MAX_LAYERS * 3}];
+uniform int   uLayerCount;
+uniform int   uMaskPreview;
+uniform float uShowOriginal;
+uniform vec2  uAspect;
+
+const vec3 LW = vec3(0.2126, 0.7152, 0.0722);
+float luma(vec3 c) { return dot(c, LW); }
+
+// a0 = exposure, contrast, highlights, shadows
+// a1 = whites, blacks, temp, tint
+// a2 = saturation, vibrance, clarity, blur
+vec3 applyAdj(vec3 c, vec4 a0, vec4 a1, vec4 a2) {
+  vec3 soft = texture(uBlur, vUV).rgb;
+
+  c = mix(c, soft, clamp(a2.w, 0.0, 1.0));       // blur
+  c += (c - soft) * a2.z * 1.2;                  // clarity (unsharp mask)
+
+  c *= exp2(a0.x);                               // exposure
+
+  c.r *= 1.0 + a1.z * 0.22;                      // temperature
+  c.b *= 1.0 - a1.z * 0.22;
+  c.g *= 1.0 - a1.w * 0.16;                      // tint
+  c.b *= 1.0 + a1.w * 0.05;
+
+  float bp   = max(-a1.y, 0.0) * 0.12;           // blacks: crush
+  float lift = max( a1.y, 0.0) * 0.12;           // blacks: lift
+  float wp   = 1.0 - max(a1.x, 0.0) * 0.14;      // whites: clip sooner
+  float ceil = 1.0 + min(a1.x, 0.0) * 0.18;      // whites: recover
+  c = (c - bp) / max(wp - bp, 0.05);
+  c = c * ceil + lift;
+
+  float l  = clamp(luma(c), 0.0, 1.0);           // region-weighted lifts
+  float sw = 1.0 - smoothstep(0.0, 0.55, l);
+  float hw = smoothstep(0.45, 1.0, l);
+  c += a0.w * 0.30 * sw;
+  c += a0.z * 0.30 * hw;
+
+  c = (c - 0.5) * (1.0 + a0.y * 0.7) + 0.5;      // contrast
+
+  c = mix(vec3(luma(c)), c, 1.0 + a2.x);         // saturation
+
+  float mx = max(c.r, max(c.g, c.b));            // vibrance pushes the flat
+  float mn = min(c.r, min(c.g, c.b));            // colours harder than the
+  float s  = clamp(mx - mn, 0.0, 1.0);           // already-saturated ones
+  c = mix(vec3(luma(c)), c, 1.0 + a2.y * (1.0 - s) * 1.5);
+
+  return c;
+}
+
+// m0 = kind, invert, feather, opacity
+// m1 = cx, cy, radius, angle
+// m2 = position, lumaLo, lumaHi, -
+float maskValue(vec4 m0, vec4 m1, vec4 m2, sampler2D brush) {
+  int kind = int(m0.x + 0.5);
+  float f = max(m0.z, 0.004);
+  float v = 1.0;
+
+  if (kind == 1) {
+    vec2 d = (vUV - m1.xy) * uAspect;
+    float r = length(d) / max(m1.z, 0.002);
+    v = 1.0 - smoothstep(1.0 - f, 1.0 + f * 0.25, r);
+  } else if (kind == 2) {
+    vec2 dir = vec2(cos(m1.w), sin(m1.w));
+    vec2 p = (vUV - vec2(0.5)) * uAspect;
+    float t = dot(p, dir) / max(length(uAspect), 0.001) + 0.5;
+    v = 1.0 - smoothstep(m2.x - f * 0.5, m2.x + f * 0.5, t);
+  } else if (kind == 3) {
+    v = texture(brush, vUV).a;
+  } else if (kind == 4) {
+    float l = luma(texture(uImage, vUV).rgb);
+    v = smoothstep(m2.y - f, m2.y + f, l) * (1.0 - smoothstep(m2.z - f, m2.z + f, l));
+  }
+
+  if (m0.y > 0.5) v = 1.0 - v;
+  return clamp(v, 0.0, 1.0) * m0.w;
+}
+
+void main() {
+  vec3 col = texture(uImage, vUV).rgb;
+  if (uShowOriginal > 0.5) { fragColor = vec4(col, 1.0); return; }
+
+  col = applyAdj(col, uG[0], uG[1], uG[2]);
+  float wash = -1.0;
+${layers}
+  col = clamp(col, 0.0, 1.0);
+  if (wash >= 0.0) col = mix(col, vec3(1.0, 0.231, 0.322), wash * 0.55);
+  fragColor = vec4(col, 1.0);
+}`;
+}
+
+let prog = null, U = {}, texImage = null, texBlur = null;
+const brushTex = new Array(MAX_LAYERS).fill(null);
+const bufG = new Float32Array(12);
+const bufL = new Float32Array(MAX_LAYERS * 12);
+const bufM = new Float32Array(MAX_LAYERS * 12);
+
+function compile(type, src) {
+  const sh = gl.createShader(type);
+  gl.shaderSource(sh, src);
+  gl.compileShader(sh);
+  if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {
+    throw new Error(gl.getShaderInfoLog(sh) || 'shader compile failed');
+  }
+  return sh;
+}
+
+function initGL() {
+  if (!gl) return false;
+  prog = gl.createProgram();
+  gl.attachShader(prog, compile(gl.VERTEX_SHADER, VERT));
+  gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, fragSource()));
+  gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+    throw new Error(gl.getProgramInfoLog(prog) || 'program link failed');
+  }
+  gl.useProgram(prog);
+
+  const vao = gl.createVertexArray();
+  gl.bindVertexArray(vao);
+  const vbo = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 1,-1, -1,1, 1,1]), gl.STATIC_DRAW);
+  const loc = gl.getAttribLocation(prog, 'aPos');
+  gl.enableVertexAttribArray(loc);
+  gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+
+  for (const n of ['uImage','uBlur','uG','uL','uM','uLayerCount','uMaskPreview','uShowOriginal','uAspect']) {
+    U[n] = gl.getUniformLocation(prog, n);
+  }
+  for (let i = 0; i < MAX_LAYERS; i++) U['uBrush' + i] = gl.getUniformLocation(prog, 'uBrush' + i);
+
+  gl.uniform1i(U.uImage, 0);
+  gl.uniform1i(U.uBlur, 1);
+  for (let i = 0; i < MAX_LAYERS; i++) gl.uniform1i(U['uBrush' + i], 2 + i);
+
+  texImage = makeTex();
+  texBlur = makeTex();
+  for (let i = 0; i < MAX_LAYERS; i++) brushTex[i] = makeTex();
+  // Every brush sampler must be bound to something valid even when unused.
+  const blank = document.createElement('canvas');
+  blank.width = blank.height = 2;
+  for (let i = 0; i < MAX_LAYERS; i++) upload(brushTex[i], blank);
+  upload(texBlur, blank);
+  return true;
+}
+
+function makeTex() {
+  const t = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, t);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  return t;
+}
+
+function upload(tex, src) {
+  gl.bindTexture(gl.TEXTURE_2D, tex);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, src);
+}
+
+/* The "blurred copy" powers both Clarity and Blur. A hard downscale plus the
+   GPU's own bilinear filtering is cheap and smooth enough for both; no
+   separable-gaussian pass needed. */
+function buildBlur(source, w, h) {
+  const scale = 140 / Math.max(w, h);
+  const c = document.createElement('canvas');
+  c.width = Math.max(2, Math.round(w * scale));
+  c.height = Math.max(2, Math.round(h * scale));
+  const ctx = c.getContext('2d');
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(source, 0, 0, c.width, c.height);
+  upload(texBlur, c);
+}
+
+let renderQueued = false;
+function requestRender() {
+  if (renderQueued || !S.image) return;
+  renderQueued = true;
+  requestAnimationFrame(() => { renderQueued = false; render(); });
+}
+
+function render() {
+  if (!S.image || !prog) return;
+
+  // A brush stroke repaints its canvas; push it to the GPU at most once a frame.
+  for (let i = 0; i < S.layers.length; i++) {
+    const L = S.layers[i];
+    if (L.brush.dirty && L.brush.canvas) {
+      upload(brushTex[i], L.brush.canvas);
+      L.brush.dirty = false;
+    }
+  }
+
+  const active = S.layers.filter(l => l.enabled);
+  bufL.fill(0); bufM.fill(0);
+  PACK.forEach((k, i) => { bufG[i] = S.global[k]; });
+
+  active.forEach((L, i) => {
+    PACK.forEach((k, j) => { bufL[i * 12 + j] = L.adj[k]; });
+    const m = L.mask, o = i * 12;
+    bufM[o + 0] = m.kind;
+    bufM[o + 1] = m.invert ? 1 : 0;
+    bufM[o + 2] = m.feather;
+    bufM[o + 3] = L.opacity;
+    bufM[o + 4] = m.cx;
+    bufM[o + 5] = m.cy;
+    bufM[o + 6] = m.radius;
+    bufM[o + 7] = m.angle * Math.PI / 180;
+    bufM[o + 8] = m.position;
+    bufM[o + 9] = m.lumaLo;
+    bufM[o + 10] = m.lumaHi;
+  });
+
+  // The mask wash follows the selected layer's slot among the enabled ones.
+  let previewIdx = -1;
+  if (S.showMask && S.sel >= 0 && S.layers[S.sel] && S.layers[S.sel].enabled) {
+    previewIdx = active.indexOf(S.layers[S.sel]);
+  }
+
+  gl.useProgram(prog);
+  gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, texImage);
+  gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, texBlur);
+  for (let i = 0; i < MAX_LAYERS; i++) {
+    gl.activeTexture(gl.TEXTURE2 + i);
+    const src = active[i] ? S.layers.indexOf(active[i]) : i;
+    gl.bindTexture(gl.TEXTURE_2D, brushTex[src] || brushTex[i]);
+  }
+
+  gl.uniform4fv(U.uG, bufG);
+  gl.uniform4fv(U.uL, bufL);
+  gl.uniform4fv(U.uM, bufM);
+  gl.uniform1i(U.uLayerCount, Math.min(active.length, MAX_LAYERS));
+  gl.uniform1i(U.uMaskPreview, previewIdx);
+  gl.uniform1f(U.uShowOriginal, S.showOriginal ? 1 : 0);
+
+  const w = S.image.w, h = S.image.h;
+  const long = Math.max(w, h);
+  gl.uniform2f(U.uAspect, w / long, h / long);
+
+  gl.viewport(0, 0, glc.width, glc.height);
+  gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+
+  scheduleHistogram();
+}
+
+/* =====================================================================
+   Histogram — reads back the rendered canvas, throttled.
+   ===================================================================== */
+const histCanvas = $('hist');
+const histCtx = histCanvas.getContext('2d');
+const histScratch = document.createElement('canvas');
+histScratch.width = 220; histScratch.height = 220;
+const histScratchCtx = histScratch.getContext('2d', { willReadFrequently: true });
+let histTimer = null;
+
+function scheduleHistogram() {
+  if (histTimer) return;
+  histTimer = setTimeout(() => { histTimer = null; drawHistogram(); }, 130);
+}
+
+function drawHistogram() {
+  if (!S.image || glc.hidden) return;
+  const ar = S.image.w / S.image.h;
+  const sw = ar >= 1 ? 220 : Math.round(220 * ar);
+  const sh = ar >= 1 ? Math.round(220 / ar) : 220;
+  histScratchCtx.clearRect(0, 0, 220, 220);
+  try { histScratchCtx.drawImage(glc, 0, 0, sw, sh); } catch { return; }
+
+  const data = histScratchCtx.getImageData(0, 0, sw, sh).data;
+  const bins = [new Uint32Array(64), new Uint32Array(64), new Uint32Array(64)];
+  for (let i = 0; i < data.length; i += 4) {
+    bins[0][data[i] >> 2]++; bins[1][data[i + 1] >> 2]++; bins[2][data[i + 2] >> 2]++;
+  }
+  let peak = 1;
+  for (const b of bins) for (const v of b) if (v > peak) peak = v;
+
+  const W = histCanvas.width, H = histCanvas.height;
+  histCtx.clearRect(0, 0, W, H);
+  histCtx.globalCompositeOperation = 'lighter';
+  const cols = ['rgba(255,70,80,.75)', 'rgba(90,230,130,.75)', 'rgba(90,150,255,.8)'];
+  bins.forEach((b, ch) => {
+    histCtx.fillStyle = cols[ch];
+    histCtx.beginPath();
+    histCtx.moveTo(0, H);
+    for (let i = 0; i < 64; i++) {
+      const x = (i / 63) * W;
+      const y = H - Math.pow(b[i] / peak, 0.42) * (H - 3);
+      histCtx.lineTo(x, y);
+    }
+    histCtx.lineTo(W, H);
+    histCtx.closePath();
+    histCtx.fill();
+  });
+  histCtx.globalCompositeOperation = 'source-over';
+}
+
+/* =====================================================================
+   Image loading
+   ===================================================================== */
+async function loadFromSource(src, label) {
+  const long = Math.max(src.width || src.videoWidth, src.height || src.videoHeight);
+  const maxTex = gl ? gl.getParameter(gl.MAX_TEXTURE_SIZE) : 4096;
+  const limit = Math.min(maxTex, 4096);
+  let w = src.width || src.videoWidth, h = src.height || src.videoHeight;
+
+  if (long > limit) {
+    const k = limit / long;
+    w = Math.round(w * k); h = Math.round(h * k);
+    const c = document.createElement('canvas');
+    c.width = w; c.height = h;
+    c.getContext('2d').drawImage(src, 0, 0, w, h);
+    src = c;
+  }
+
+  S.image = { source: src, w, h };
+  S.layers = [];
+  S.sel = -1;
+  S.global = newAdj();
+  S.showMask = false;
+
+  upload(texImage, src);
+  buildBlur(src, w, h);
+  sizePreview();
+  $('empty').hidden = true;
+  $('gl').hidden = false;
+  $('hist').hidden = false;
+  $('video').hidden = true;
+  $('stackCanvas').hidden = true;
+  $('badge').hidden = true;
+  $('exportBtn').disabled = false;
+  $('saveBox').hidden = true;
+  $('readout').textContent = `${w}×${h} · ${(w * h / 1e6).toFixed(1)} MP${label ? ' · ' + label : ''}`;
+  buildRail(); buildSliders(); buildMaskBox();
+  render();
+}
+
+function sizePreview() {
+  if (!S.image) return;
+  const { w, h } = S.image;
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const stage = $('stage').getBoundingClientRect();
+  const avail = { w: Math.max(stage.width - 16, 80), h: Math.max(stage.height - 16, 80) };
+  const fit = Math.min(avail.w / w, avail.h / h, 1);
+  const cssW = Math.round(w * fit), cssH = Math.round(h * fit);
+  glc.style.width = cssW + 'px';
+  glc.style.height = cssH + 'px';
+  glc.width = Math.min(Math.round(cssW * dpr), PREVIEW_MAX);
+  glc.height = Math.min(Math.round(cssH * dpr), PREVIEW_MAX);
+}
+
+function fileToImage(input, label) {
+  const f = input.files && input.files[0];
+  if (!f) return;
+  const url = URL.createObjectURL(f);
+  const img = new Image();
+  img.onload = async () => {
+    try {
+      setMode('edit');
+      await loadFromSource(img, label);
+    } catch (e) { toast('Could not load that photo'); }
+    URL.revokeObjectURL(url);
+  };
+  img.onerror = () => { toast('That file is not an image Lumen can read'); URL.revokeObjectURL(url); };
+  img.src = url;
+  input.value = '';
+}
+
+/* =====================================================================
+   Layers, masks, sliders
+   ===================================================================== */
+function buildRail() {
+  const rail = $('rail');
+  rail.textContent = '';
+
+  const g = document.createElement('button');
+  g.className = 'chip';
+  g.setAttribute('aria-selected', S.sel === -1);
+  g.textContent = 'Global';
+  g.onclick = () => { S.sel = -1; S.showMask = false; refreshDeck(); requestRender(); };
+  rail.append(g);
+
+  S.layers.forEach((L, i) => {
+    const b = document.createElement('button');
+    b.className = 'chip' + (L.enabled ? '' : ' off');
+    b.setAttribute('aria-selected', S.sel === i);
+    const kind = MASK_KINDS.find(m => m.id === L.mask.kind);
+    b.innerHTML = `<span class="dot"></span>${kind ? kind.label : 'Layer'}`;
+    b.onclick = () => {
+      if (S.sel === i) S.showMask = !S.showMask;
+      else { S.sel = i; S.showMask = L.mask.kind !== 0; }
+      refreshDeck(); requestRender();
+    };
+    rail.append(b);
+  });
+
+  if (S.layers.length < MAX_LAYERS) {
+    const add = document.createElement('button');
+    add.className = 'chip';
+    add.textContent = '+ Layer';
+    // One tap adds a radial layer — the most common local edit. The mask
+    // picker below switches it to brush, linear or luminance.
+    add.onclick = () => addLayer(1);
+    rail.append(add);
+  }
+}
+
+function addLayer(kindId) {
+  if (S.layers.length >= MAX_LAYERS) { toast(`Six layers is the limit`); return; }
+  const L = newLayer(kindId);
+  S.layers.push(L);
+  S.sel = S.layers.length - 1;
+  S.showMask = true;
+  ensureBrush(L);
+  refreshDeck();
+  requestRender();
+}
+
+function ensureBrush(L) {
+  if (L.brush.canvas || !S.image) return;
+  const { w, h } = S.image;
+  const k = BRUSH_MAX / Math.max(w, h);
+  const c = document.createElement('canvas');
+  c.width = Math.max(8, Math.round(w * Math.min(k, 1)));
+  c.height = Math.max(8, Math.round(h * Math.min(k, 1)));
+  L.brush.canvas = c;
+  L.brush.ctx = c.getContext('2d');
+  L.brush.dirty = true;
+}
+
+const target = () => (S.sel === -1 ? S.global : S.layers[S.sel].adj);
+
+function buildSliders() {
+  const host = $('sliders');
+  host.textContent = '';
+  const t = target();
+  if (!t) return;
+
+  for (const d of ADJ) {
+    if (d.group !== S.group) continue;
+    const wrap = document.createElement('div');
+    wrap.className = 'field';
+    const hot = Math.abs(t[d.k] - d.def) > 1e-6;
+    if (hot) wrap.classList.add('live');
+
+    const top = document.createElement('div');
+    top.className = 'top';
+    const lab = document.createElement('label');
+    lab.textContent = d.label;
+    lab.htmlFor = 'sl_' + d.k;
+    const val = document.createElement('span');
+    val.className = 'val';
+    val.textContent = d.fmt(t[d.k]);
+    top.append(lab, val);
+
+    const r = document.createElement('input');
+    r.type = 'range'; r.id = 'sl_' + d.k;
+    r.min = d.min; r.max = d.max; r.step = d.step; r.value = t[d.k];
+    if (hot) r.classList.add('hot');
+    r.oninput = () => {
+      const v = parseFloat(r.value);
+      target()[d.k] = v;
+      val.textContent = d.fmt(v);
+      const on = Math.abs(v - d.def) > 1e-6;
+      r.classList.toggle('hot', on);
+      wrap.classList.toggle('live', on);
+      requestRender();
+    };
+    r.ondblclick = () => { r.value = d.def; r.oninput(); };
+
+    wrap.append(top, r);
+    host.append(wrap);
+  }
+}
+
+function sectionField(label, value, min, max, step, fmt, onInput) {
+  const wrap = document.createElement('div');
+  wrap.className = 'field';
+  const top = document.createElement('div');
+  top.className = 'top';
+  const lab = document.createElement('label');
+  lab.textContent = label;
+  const val = document.createElement('span');
+  val.className = 'val';
+  val.textContent = fmt(value);
+  top.append(lab, val);
+  const r = document.createElement('input');
+  r.type = 'range'; r.min = min; r.max = max; r.step = step; r.value = value;
+  lab.htmlFor = r.id = 'f_' + label.replace(/\W+/g, '');
+  r.oninput = () => {
+    const v = parseFloat(r.value);
+    val.textContent = fmt(v);
+    onInput(v);
+  };
+  wrap.append(top, r);
+  return wrap;
+}
+
+function buildMaskBox() {
+  const box = $('maskBox');
+  box.textContent = '';
+  if (S.sel < 0 || !S.layers[S.sel]) { box.hidden = true; return; }
+  box.hidden = false;
+
+  const L = S.layers[S.sel];
+  const m = L.mask;
+  const sect = document.createElement('div');
+  sect.className = 'sect';
+
+  const h3 = document.createElement('h3');
+  h3.textContent = 'Mask';
+  sect.append(h3);
+
+  // Kind picker
+  const kinds = document.createElement('div');
+  kinds.className = 'btnrow';
+  for (const K of MASK_KINDS) {
+    const b = document.createElement('button');
+    b.className = 'btn' + (m.kind === K.id ? ' on' : '');
+    b.textContent = K.label;
+    b.onclick = () => {
+      m.kind = K.id;
+      if (K.id === 3) ensureBrush(L);
+      S.showMask = K.id !== 0;
+      refreshDeck(); requestRender();
+    };
+    kinds.append(b);
+  }
+  sect.append(kinds);
+
+  // Kind-specific parameters
+  if (m.kind === 1) {
+    sect.append(sectionField('Size', m.radius, .03, 1.2, .005, v => v.toFixed(2),
+      v => { m.radius = v; requestRender(); }));
+    sect.append(sectionField('Feather', m.feather, .01, 1, .01, v => v.toFixed(2),
+      v => { m.feather = v; requestRender(); }));
+    sect.append(hintEl('Drag on the photo to move the centre.'));
+  } else if (m.kind === 2) {
+    sect.append(sectionField('Angle', m.angle, 0, 360, 1, v => Math.round(v) + '°',
+      v => { m.angle = v; requestRender(); }));
+    sect.append(sectionField('Feather', m.feather, .01, 1, .01, v => v.toFixed(2),
+      v => { m.feather = v; requestRender(); }));
+    sect.append(hintEl('Drag on the photo to move the transition.'));
+  } else if (m.kind === 3) {
+    sect.append(sectionField('Brush size', L.brush.size, .01, .3, .005, v => v.toFixed(3),
+      v => { L.brush.size = v; }));
+    sect.append(sectionField('Softness', L.brush.softness, 0, 1, .01, v => v.toFixed(2),
+      v => { L.brush.softness = v; }));
+    const row = document.createElement('div');
+    row.className = 'btnrow';
+    const er = document.createElement('button');
+    er.className = 'btn' + (L.brush.erasing ? ' on' : '');
+    er.textContent = 'Erase';
+    er.onclick = () => { L.brush.erasing = !L.brush.erasing; refreshDeck(); };
+    const cl = document.createElement('button');
+    cl.className = 'btn ghost';
+    cl.textContent = 'Clear';
+    cl.onclick = () => {
+      if (L.brush.ctx) {
+        L.brush.ctx.clearRect(0, 0, L.brush.canvas.width, L.brush.canvas.height);
+        L.brush.dirty = true; requestRender();
+      }
+    };
+    row.append(er, cl);
+    sect.append(row, hintEl('Paint on the photo to build the mask.'));
+  } else if (m.kind === 4) {
+    sect.append(sectionField('Range start', m.lumaLo, 0, 1, .01, v => v.toFixed(2),
+      v => { m.lumaLo = v; requestRender(); }));
+    sect.append(sectionField('Range end', m.lumaHi, 0, 1, .01, v => v.toFixed(2),
+      v => { m.lumaHi = v; requestRender(); }));
+    sect.append(sectionField('Softness', m.feather, .01, .5, .01, v => v.toFixed(2),
+      v => { m.feather = v; requestRender(); }));
+    sect.append(hintEl('Targets only the tones inside the range — shadows, midtones or highlights.'));
+  } else {
+    sect.append(hintEl('This layer covers the whole frame. Useful stacked under a mask, or for a second pass of tone.'));
+  }
+
+  sect.append(sectionField('Layer strength', L.opacity, 0, 1, .01, fmtPct,
+    v => { L.opacity = v; requestRender(); }));
+
+  // Layer actions
+  const acts = document.createElement('div');
+  acts.className = 'btnrow';
+  const inv = document.createElement('button');
+  inv.className = 'btn' + (m.invert ? ' on' : '');
+  inv.textContent = 'Invert';
+  inv.onclick = () => { m.invert = !m.invert; refreshDeck(); requestRender(); };
+  const vis = document.createElement('button');
+  vis.className = 'btn' + (L.enabled ? ' on' : '');
+  vis.textContent = L.enabled ? 'Enabled' : 'Disabled';
+  vis.onclick = () => { L.enabled = !L.enabled; refreshDeck(); requestRender(); };
+  const wash = document.createElement('button');
+  wash.className = 'btn' + (S.showMask ? ' on' : '');
+  wash.textContent = 'Show mask';
+  wash.onclick = () => { S.showMask = !S.showMask; refreshDeck(); requestRender(); };
+  const del = document.createElement('button');
+  del.className = 'btn ghost';
+  del.textContent = 'Delete';
+  del.onclick = () => {
+    S.layers.splice(S.sel, 1);
+    S.sel = S.layers.length ? Math.min(S.sel, S.layers.length - 1) : -1;
+    refreshDeck(); requestRender();
+  };
+  acts.append(inv, vis, wash, del);
+  sect.append(acts);
+
+  box.append(sect);
+}
+
+function hintEl(text) {
+  const p = document.createElement('p');
+  p.className = 'hint';
+  p.innerHTML = text.replace(/\*\*(.+?)\*\*/g, '<b>$1</b>');
+  return p;
+}
+
+function refreshDeck() { buildRail(); buildMaskBox(); buildSliders(); }
+
+/* =====================================================================
+   Canvas interaction — brush painting and mask placement
+   ===================================================================== */
+let painting = false;
+let lastPaint = null;
+
+function canvasUV(ev) {
+  const r = glc.getBoundingClientRect();
+  return {
+    x: clamp((ev.clientX - r.left) / r.width, 0, 1),
+    y: clamp((ev.clientY - r.top) / r.height, 0, 1),
+  };
+}
+
+function stamp(L, uv) {
+  const c = L.brush.canvas, ctx = L.brush.ctx;
+  if (!ctx) return;
+  const px = uv.x * c.width, py = uv.y * c.height;
+  const rad = Math.max(L.brush.size * c.width, 1.5);
+  const inner = clamp(1 - L.brush.softness, 0.02, 0.98);
+
+  const g = ctx.createRadialGradient(px, py, rad * inner, px, py, rad);
+  g.addColorStop(0, 'rgba(255,255,255,1)');
+  g.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.globalCompositeOperation = L.brush.erasing ? 'destination-out' : 'source-over';
+  ctx.globalAlpha = 0.34;
+  ctx.fillStyle = g;
+  ctx.beginPath();
+  ctx.arc(px, py, rad, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.globalAlpha = 1;
+  ctx.globalCompositeOperation = 'source-over';
+  L.brush.dirty = true;
+}
+
+function paintTo(L, uv) {
+  if (!lastPaint) { stamp(L, uv); lastPaint = uv; return; }
+  // Interpolate so a fast drag stays a continuous stroke rather than dots.
+  const dx = uv.x - lastPaint.x, dy = uv.y - lastPaint.y;
+  const dist = Math.hypot(dx, dy);
+  const step = Math.max(L.brush.size * 0.35, 0.004);
+  const n = Math.max(1, Math.ceil(dist / step));
+  for (let i = 1; i <= n; i++) {
+    stamp(L, { x: lastPaint.x + dx * (i / n), y: lastPaint.y + dy * (i / n) });
+  }
+  lastPaint = uv;
+}
+
+function onPointer(ev) {
+  if (S.mode !== 'edit' || S.sel < 0 || !S.image) return;
+  const L = S.layers[S.sel];
+  if (!L) return;
+  const uv = canvasUV(ev);
+  const m = L.mask;
+
+  if (m.kind === 3) {
+    ensureBrush(L);
+    paintTo(L, uv);
+  } else if (m.kind === 1) {
+    m.cx = uv.x; m.cy = uv.y;
+  } else if (m.kind === 2) {
+    const long = Math.max(S.image.w, S.image.h);
+    const ax = S.image.w / long, ay = S.image.h / long;
+    const a = m.angle * Math.PI / 180;
+    const px = (uv.x - .5) * ax, py = (uv.y - .5) * ay;
+    const t = (px * Math.cos(a) + py * Math.sin(a)) / Math.hypot(ax, ay) + .5;
+    m.position = clamp(t, 0, 1);
+  } else return;
+
+  requestRender();
+}
+
+glc.addEventListener('pointerdown', ev => {
+  if (S.mode !== 'edit' || S.sel < 0) return;
+  painting = true; lastPaint = null;
+  glc.setPointerCapture(ev.pointerId);
+  onPointer(ev);
+  ev.preventDefault();
+});
+glc.addEventListener('pointermove', ev => { if (painting) onPointer(ev); });
+glc.addEventListener('pointerup', () => { painting = false; lastPaint = null; });
+glc.addEventListener('pointercancel', () => { painting = false; lastPaint = null; });
+
+/* =====================================================================
+   Camera
+   ===================================================================== */
+const video = $('video');
+const stackCanvas = $('stackCanvas');
+
+const CAM_CONTROLS = [
+  { k: 'exposureTime', label: 'Shutter', fmt: v => {
+      const s = v * 1e-4;                       // spec: exposureTime is in 100 µs units
+      return s >= 1 ? s.toFixed(1) + ' s' : '1/' + Math.round(1 / s);
+    }, manualFor: 'exposureMode' },
+  { k: 'iso', label: 'ISO', fmt: v => String(Math.round(v)), manualFor: 'exposureMode' },
+  { k: 'exposureCompensation', label: 'Exposure comp.', fmt: v => (v >= 0 ? '+' : '') + v.toFixed(1) + ' EV' },
+  { k: 'focusDistance', label: 'Focus distance', fmt: v => v.toFixed(2), manualFor: 'focusMode' },
+  { k: 'colorTemperature', label: 'White balance', fmt: v => Math.round(v) + ' K', manualFor: 'whiteBalanceMode' },
+  { k: 'zoom', label: 'Zoom', fmt: v => v.toFixed(2) + '×' },
+];
+
+/* Browsers hand out a camera only on a "secure origin": https, localhost or
+   127.0.0.1. file://, data: and a LAN address over plain http are opaque or
+   insecure, and there navigator.mediaDevices is absent altogether — there is no
+   permission to grant, so no amount of clicking Allow will help. Worth naming
+   precisely, because all of it surfaces to the user as "camera denied". */
+function cameraBlockReason() {
+  const p = location.protocol;
+  const serve = 'Serve the folder instead — <code>python -m http.server 8000 --directory web</code> — ' +
+                'and open <code>http://localhost:8000</code>.';
+
+  if (p === 'file:' || p === 'data:' || p === 'blob:' || location.origin === 'null') {
+    return `<b>This page was opened as <code>${p}</code></b>, which is an opaque origin. ` +
+           `The browser removes the camera API entirely; nothing was denied. ${serve}`;
+  }
+  if (!window.isSecureContext) {
+    return `<b><code>${location.origin}</code> is not a secure origin.</b> Only <code>https://</code>, ` +
+           `<code>localhost</code> and <code>127.0.0.1</code> qualify. A LAN address such as ` +
+           `<code>http://192.168.1.20:8000</code> does not — which is why pointing a phone at a ` +
+           `server on your PC fails. Use HTTPS: GitHub Pages, or a tunnel.`;
+  }
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    return '<b>No <code>getUserMedia</code> in this browser.</b> Safari has had it since iOS 11, ' +
+           'so this usually means the page sits in a frame that withholds camera access.';
+  }
+  return null;
+}
+
+const IS_IOS = /iP(hone|ad|od)/.test(navigator.userAgent) ||
+               (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const IS_MAC = /Mac/.test(navigator.userAgent) && !IS_IOS;
+const IS_STANDALONE = navigator.standalone === true ||
+                      window.matchMedia('(display-mode: standalone)').matches;
+// Safari proper carries "Safari/" in the UA; a WKWebView hosted by another app does not.
+const IS_INAPP = IS_IOS && !IS_STANDALONE && !/Safari\//.test(navigator.userAgent);
+
+/* NotAllowedError means the origin and the API were both fine and the user or
+   the OS said no. What to do about it is entirely platform-specific, so say the
+   right thing rather than something generic. */
+function reportCameraError(e) {
+  const name = (e && e.name) || 'Error';
+  let html;
+
+  if (name === 'NotAllowedError') {
+    html = '<b>Safari refused the camera.</b> The page and the server are fine — this is a ' +
+           'permission, and Safari remembers a refusal per site.';
+    if (IS_STANDALONE) {
+      html += '<br><br><b>This was launched from the Home Screen.</b> Camera access in ' +
+              'home-screen web apps has a long history of failing on iOS. Open the same URL in ' +
+              'Safari itself and grant it there first.';
+    }
+    if (IS_INAPP) {
+      html += '<br><br><b>This looks like an in-app browser.</b> A web view inside another app ' +
+              'cannot reach the camera. Tap the share icon and choose Open in Safari.';
+    }
+    if (IS_IOS) {
+      html += '<br><br>1. Tap <b>aA</b> in the address bar → <b>Website Settings</b> → ' +
+              '<b>Camera</b> → Allow.<br>' +
+              '2. Settings → Safari → Settings for Websites → <b>Camera</b> must not be Deny.<br>' +
+              '3. Private Browsing and Lockdown Mode both block it.';
+    } else if (IS_MAC) {
+      html += '<br><br>1. System Settings → Privacy &amp; Security → <b>Camera</b> → enable Safari.<br>' +
+              '2. Safari → Settings → Websites → <b>Camera</b> → set this site to Allow.<br>' +
+              '3. Reload afterwards.';
+    } else {
+      html += '<br><br>Check the camera icon in the address bar, then your OS privacy settings.';
+    }
+  } else if (name === 'NotFoundError' || name === 'DevicesNotFoundError') {
+    html = '<b>No camera found.</b> This device reports no video input at all.';
+  } else if (name === 'NotReadableError' || name === 'TrackStartError') {
+    html = '<b>The camera is busy.</b> Another app or tab already holds it. Close those and retry.';
+  } else if (name === 'OverconstrainedError') {
+    html = '<b>No camera matches the request.</b> Lumen already retried with the plainest ' +
+           'possible settings, so this device exposes no usable video mode.';
+  } else if (name === 'SecurityError') {
+    html = "<b>Blocked by this page's permissions policy.</b> That usually means an iframe " +
+           'without <code>allow="camera"</code>.';
+  } else {
+    html = `<b>${name}.</b> ${(e && e.message) || 'The camera could not be opened.'}`;
+  }
+
+  html += '<br><br><span style="font-family:var(--fm);font-size:10px;opacity:.55">' +
+          `${IS_IOS ? 'iOS' : IS_MAC ? 'macOS' : 'other'}` +
+          `${IS_STANDALONE ? ' · home-screen' : ''}${IS_INAPP ? ' · in-app browser' : ''}` +
+          ` · ${location.origin} · secure=${window.isSecureContext}</span>`;
+
+  $('caps').textContent = '';
+  $('capsNote').innerHTML = html;
+  toast(name === 'NotAllowedError' ? 'Safari refused — see below' : name);
+}
+
+async function startCamera() {
+  const blocked = cameraBlockReason();
+  if (blocked) {
+    $('capsNote').innerHTML = blocked;
+    $('caps').textContent = '';
+    toast('Camera unavailable on this origin');
+    return;
+  }
+  stopCamera();
+
+  // Safari is fussier than the others, so fall back from rich constraints to a
+  // bare request rather than giving up on the first rejection. A refused
+  // permission is final though — retrying only re-prompts.
+  const attempts = [
+    { video: { facingMode: { ideal: S.facing }, width: { ideal: 4096 }, height: { ideal: 3072 } }, audio: false },
+    { video: { facingMode: S.facing }, audio: false },
+    { video: true, audio: false },
+  ];
+  let lastError = null;
+  for (const constraints of attempts) {
+    try {
+      S.stream = await navigator.mediaDevices.getUserMedia(constraints);
+      lastError = null;
+      break;
+    } catch (e) {
+      lastError = e;
+      if (e && e.name === 'NotAllowedError') break;
+    }
+  }
+
+  if (lastError) {
+    reportCameraError(lastError);
+    return;
+  }
+
+  S.track = S.stream.getVideoTracks()[0];
+  video.srcObject = S.stream;
+  await video.play().catch(() => {});
+
+  video.hidden = false;
+  stackCanvas.hidden = true;
+  glc.hidden = true;
+  $('hist').hidden = true;
+  $('empty').hidden = true;
+  $('snap').disabled = false;
+  $('doStack').disabled = false;
+  $('swapCam').disabled = false;
+
+  const st = S.track.getSettings ? S.track.getSettings() : {};
+  $('readout').textContent = `${st.width || video.videoWidth}×${st.height || video.videoHeight} live`;
+  probeCapabilities();
+}
+
+function stopCamera() {
+  if (S.stream) S.stream.getTracks().forEach(t => t.stop());
+  S.stream = null; S.track = null;
+  video.srcObject = null;
+  $('snap').disabled = true;
+  $('doStack').disabled = true;
+}
+
+function probeCapabilities() {
+  const host = $('caps');
+  const controls = $('camControls');
+  host.textContent = '';
+  controls.textContent = '';
+
+  const caps = (S.track && S.track.getCapabilities) ? S.track.getCapabilities() : {};
+  const settings = (S.track && S.track.getSettings) ? S.track.getSettings() : {};
+  const found = [];
+
+  for (const C of CAM_CONTROLS) {
+    const cap = caps[C.k];
+    const row = document.createElement('div');
+    row.className = 'cap' + (cap ? ' yes' : '');
+    const supported = !!cap && typeof cap === 'object' && 'max' in cap;
+    row.innerHTML = `<span class="k">${C.label}</span><span class="v">${
+      supported ? `${C.fmt(cap.min)} – ${C.fmt(cap.max)}` : 'not exposed'
+    }</span>`;
+    host.append(row);
+    if (supported) found.push({ C, cap, current: settings[C.k] });
+  }
+
+  if (!found.length) {
+    $('capsNote').innerHTML = '<b>No manual controls.</b> Safari on iOS exposes no ' +
+      'shutter, ISO, focus or white-balance constraints through <code>getUserMedia</code> — ' +
+      'this is a browser limit, not a bug here. Use stacking below for slow-shutter looks, ' +
+      'and the native build for real manual exposure.';
+    return;
+  }
+
+  $('capsNote').innerHTML = `<b>${found.length} control${found.length > 1 ? 's' : ''} available.</b> ` +
+    'These drive the sensor directly through track constraints.';
+
+  const sect = document.createElement('div');
+  sect.className = 'sect';
+  const h3 = document.createElement('h3');
+  h3.textContent = 'Sensor';
+  sect.append(h3);
+
+  for (const f of found) {
+    const cap = f.cap, C = f.C;
+    const start = typeof f.current === 'number' ? f.current : (cap.min + cap.max) / 2;
+    sect.append(sectionField(C.label, start, cap.min, cap.max, cap.step || (cap.max - cap.min) / 100,
+      C.fmt, async v => {
+        const adv = {};
+        if (C.manualFor) adv[C.manualFor] = 'manual';
+        adv[C.k] = v;
+        try { await S.track.applyConstraints({ advanced: [adv] }); }
+        catch { toast(C.label + ' was refused by the camera'); }
+      }));
+  }
+  controls.append(sect);
+}
+
+function grabFrame() {
+  const w = video.videoWidth, h = video.videoHeight;
+  if (!w || !h) return null;
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  c.getContext('2d').drawImage(video, 0, 0, w, h);
+  return c;
+}
+
+$('snap').onclick = async () => {
+  const c = grabFrame();
+  if (!c) { toast('No frame yet'); return; }
+  S.lastShot = c;
+  $('thumb').style.backgroundImage = `url(${c.toDataURL('image/jpeg', 0.6)})`;
+  stopCamera();
+  await loadFromSource(c, 'from camera');
+  setMode('edit');
+};
+
+$('thumb').onclick = async () => {
+  if (!S.lastShot) { toast('Nothing captured yet'); return; }
+  stopCamera();
+  await loadFromSource(S.lastShot, 'from camera');
+  setMode('edit');
+};
+
+$('swapCam').onclick = () => {
+  S.facing = S.facing === 'environment' ? 'user' : 'environment';
+  startCamera();
+};
+
+$('startCam').onclick = () => startCamera();
+
+/* Frame stacking. A Float32Array accumulator keeps full precision — averaging
+   through canvas alpha would quantise each frame to a couple of levels. */
+let stacking = false;
+async function doStack() {
+  if (!S.track || stacking) return;
+  const seconds = parseFloat($('stackSecs').value);
+  const w = video.videoWidth, h = video.videoHeight;
+  if (!w || !h) { toast('No frame yet'); return; }
+
+  stacking = true;
+  $('doStack').disabled = true;
+  $('snap').disabled = true;
+
+  const scratch = document.createElement('canvas');
+  scratch.width = w; scratch.height = h;
+  const sctx = scratch.getContext('2d', { willReadFrequently: true });
+
+  const n = w * h * 4;
+  const acc = new Float32Array(n);
+  const lighten = S.stackMode === 'max';
+  let frames = 0;
+
+  stackCanvas.width = w; stackCanvas.height = h;
+  const outCtx = stackCanvas.getContext('2d');
+  video.hidden = true;
+  stackCanvas.hidden = false;
+  $('badge').hidden = false;
+
+  const t0 = performance.now();
+  const deadline = t0 + seconds * 1000;
+
+  while (performance.now() < deadline && frames < 600) {
+    sctx.drawImage(video, 0, 0, w, h);
+    const px = sctx.getImageData(0, 0, w, h).data;
+    if (lighten) {
+      for (let i = 0; i < n; i += 4) {
+        if (px[i] > acc[i]) acc[i] = px[i];
+        if (px[i + 1] > acc[i + 1]) acc[i + 1] = px[i + 1];
+        if (px[i + 2] > acc[i + 2]) acc[i + 2] = px[i + 2];
+      }
+    } else {
+      for (let i = 0; i < n; i += 4) {
+        acc[i] += px[i]; acc[i + 1] += px[i + 1]; acc[i + 2] += px[i + 2];
+      }
+    }
+    frames++;
+
+    const elapsed = (performance.now() - t0) / 1000;
+    $('badge').textContent = `${elapsed.toFixed(1)}s · ${frames} frames`;
+
+    // Show progress: cheap to reuse the last frame's raw pixels.
+    if (frames % 4 === 0) {
+      const out = outCtx.createImageData(w, h);
+      const div = lighten ? 1 : frames;
+      for (let i = 0; i < n; i += 4) {
+        out.data[i] = acc[i] / div;
+        out.data[i + 1] = acc[i + 1] / div;
+        out.data[i + 2] = acc[i + 2] / div;
+        out.data[i + 3] = 255;
+      }
+      outCtx.putImageData(out, 0, 0);
+    }
+    await new Promise(r => requestAnimationFrame(r));
+  }
+
+  const out = outCtx.createImageData(w, h);
+  const div = lighten ? 1 : Math.max(frames, 1);
+  for (let i = 0; i < n; i += 4) {
+    out.data[i] = acc[i] / div;
+    out.data[i + 1] = acc[i + 1] / div;
+    out.data[i + 2] = acc[i + 2] / div;
+    out.data[i + 3] = 255;
+  }
+  outCtx.putImageData(out, 0, 0);
+
+  stacking = false;
+  $('doStack').disabled = false;
+  $('snap').disabled = false;
+  $('badge').textContent = `${seconds.toFixed(1)}s · ${frames} frames · ${lighten ? 'lighten' : 'average'}`;
+
+  S.lastShot = stackCanvas;
+  $('thumb').style.backgroundImage = `url(${stackCanvas.toDataURL('image/jpeg', 0.6)})`;
+  toast(`Stacked ${frames} frames — open it in the darkroom`);
+}
+$('doStack').onclick = doStack;
+
+$('stackSecs').oninput = e => {
+  $('stackSecsVal').textContent = parseFloat(e.target.value).toFixed(1) + ' s';
+};
+$('stackAvg').onclick = () => {
+  S.stackMode = 'avg';
+  $('stackAvg').setAttribute('aria-selected', 'true');
+  $('stackMax').setAttribute('aria-selected', 'false');
+};
+$('stackMax').onclick = () => {
+  S.stackMode = 'max';
+  $('stackAvg').setAttribute('aria-selected', 'false');
+  $('stackMax').setAttribute('aria-selected', 'true');
+};
+
+/* =====================================================================
+   Export
+   ===================================================================== */
+$('exportBtn').onclick = async () => {
+  if (!S.image) return;
+  const { w, h } = S.image;
+  const keepW = glc.width, keepH = glc.height;
+  const keepCSS = { w: glc.style.width, h: glc.style.height };
+
+  glc.width = w; glc.height = h;
+  const wasMask = S.showMask;
+  S.showMask = false;
+  render();
+
+  const blob = await new Promise(res => glc.toBlob(res, 'image/jpeg', 0.95));
+
+  S.showMask = wasMask;
+  glc.width = keepW; glc.height = keepH;
+  glc.style.width = keepCSS.w; glc.style.height = keepCSS.h;
+  render();
+
+  if (!blob) { toast('Export failed'); return; }
+
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `lumen-${Date.now()}.jpg`;
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 20000);
+
+  // iOS routes downloads into Files, not Photos. A plain <img> can be
+  // long-pressed straight into the camera roll, so offer both.
+  const img = $('saveImg');
+  img.src = URL.createObjectURL(blob);
+  $('saveBox').hidden = false;
+  toast(`Exported at ${w}×${h}`);
+};
+
+$('resetBtn').onclick = () => {
+  if (S.sel === -1) S.global = newAdj();
+  else if (S.layers[S.sel]) S.layers[S.sel].adj = newAdj();
+  refreshDeck(); requestRender();
+};
+
+const orig = $('origBtn');
+const holdOn = e => { e.preventDefault(); S.showOriginal = true; render(); };
+const holdOff = () => { if (S.showOriginal) { S.showOriginal = false; render(); } };
+orig.addEventListener('pointerdown', holdOn);
+orig.addEventListener('pointerup', holdOff);
+orig.addEventListener('pointerleave', holdOff);
+orig.addEventListener('pointercancel', holdOff);
+
+/* =====================================================================
+   Mode switching, tabs, wiring
+   ===================================================================== */
+function setMode(mode) {
+  S.mode = mode;
+  $('tabCam').setAttribute('aria-selected', mode === 'cam');
+  $('tabEdit').setAttribute('aria-selected', mode === 'edit');
+  $('deckCam').hidden = mode !== 'cam';
+  $('deckEdit').hidden = mode === 'cam';
+
+  if (mode === 'cam') {
+    glc.hidden = true;
+    $('hist').hidden = true;
+    $('empty').hidden = !!S.stream;
+    if (!S.stream) {
+      $('empty').hidden = false;
+      video.hidden = true;
+      stackCanvas.hidden = true;
+      // Say why up front rather than after a failed tap on Start.
+      const blocked = cameraBlockReason();
+      if (blocked) { $('capsNote').innerHTML = blocked; $('caps').textContent = ''; }
+    }
+  } else {
+    stopCamera();
+    video.hidden = true;
+    stackCanvas.hidden = true;
+    $('badge').hidden = true;
+    if (S.image) {
+      glc.hidden = false;
+      $('hist').hidden = false;
+      $('empty').hidden = true;
+      sizePreview();
+      render();
+    } else {
+      $('empty').hidden = false;
+    }
+  }
+}
+
+$('tabCam').onclick = () => setMode('cam');
+$('tabEdit').onclick = () => setMode('edit');
+
+for (const [id, g] of [['gLight', 'light'], ['gColor', 'color'], ['gDetail', 'detail']]) {
+  $(id).onclick = () => {
+    S.group = g;
+    for (const [i2, g2] of [['gLight', 'light'], ['gColor', 'color'], ['gDetail', 'detail']]) {
+      $(i2).setAttribute('aria-selected', g2 === g);
+    }
+    buildSliders();
+  };
+}
+
+$('fileTop').onchange = e => fileToImage(e.target, 'imported');
+$('fileCam').onchange = e => fileToImage(e.target, 'imported');
+$('fileEdit').onchange = e => fileToImage(e.target, 'imported');
+
+let resizeTimer = null;
+window.addEventListener('resize', () => {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => { if (S.image && !glc.hidden) { sizePreview(); render(); } }, 120);
+});
+
+/* ---------- boot ---------- */
+try {
+  if (!gl) throw new Error('WebGL2 is unavailable in this browser');
+  initGL();
+  setMode('edit');
+  buildRail(); buildSliders();
+} catch (e) {
+  $('empty').innerHTML =
+    `<h2>Lumen cannot start</h2><p>${String(e.message || e)}</p>` +
+    `<p>The darkroom needs WebGL2. Safari has supported it since iOS 15.</p>`;
+  $('empty').hidden = false;
+}
+</script>
+</body>
+</html>
